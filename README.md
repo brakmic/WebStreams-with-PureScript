@@ -25,7 +25,11 @@ gulp build-demo
 
 ### Usage
 
-Run the demo with HapiJS via `npm start` and open your browser at http://localhost:8080
+Run the demo with HapiJS via
+
+`npm start`
+
+and open your browser at <a href="http://localhost:8080">http://localhost:8080</a>
 
 Open your browser's console to see the stream data flowing in.
 
