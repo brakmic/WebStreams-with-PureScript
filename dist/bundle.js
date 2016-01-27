@@ -4,64 +4,131 @@ var PS = { };
   
   // module API.Web.Streams
 
+  //********************************************************************************************
+  //This is an `old-style` ECMAScript 5 script file describing the needed
+  //`foreign import` interfaces for PureScript.
+  //There's no need for any more powerful stuff as this is just a simple demo. A
+  //Currently, don't need any extra machinery like Babel or WebPack plugins to transpile it.
+  //********************************************************************************************
+
+  //Function: log raw data to console
+  //Helper function to log all object regardless of type.
+  //Useful for quick debugging when working with PureScript.
   var logRaw = function(str) {
     return function() {
       console.log(str);
       return {};
     };
   };
-  //read from stream
-  //url: resource to read from
-  //callback: a PS-function to be called for each stream chunk
+
+  //Function        : read data from web-stream
+  //Param, url      : resource to read from
+  //Param, callback : a PureScript-function to be called for each stream chunk
   var read = function(url){
     return function(callback){
-      return function(){
-        var _fetch = fetch(url).then(function(response){
-          var reader = response.body.getReader();
-          var bytesReceived = 0;
-          var complete = null;
+      return function(decoder){
+        return function(){
+          var _fetch = fetch(url).then(function(response){
+            var reader = response.body.getReader();
+            var bytesReceived = 0;
+            var complete = null;
+            var decoder = decoder ? decoder : getDecoder('utf8')({ fatal: true })();
+            //Unlike the original demo from https://jakearchibald.com/2016/streams-ftw/
+            //we `return` the Promise which will be later resolved within a wrapper function.
+            //This is important as we play between JavaScript & PureScript worlds which handle
+            //functions completely differently. One of the most important things is that there
+            //are no functions with multiple arguments in PureScript. All functions are curried.
+            //That's why we have to `convert` them into nested `one-argument` JS-functions.
+            return reader.read().then(function processResult(result){
+                    var current = null;
+                    if(result.done){
+                      console.log('Fetch completed reading of ' + bytesReceived + ' bytes.');
+                      return complete;
+                    }
+                    bytesReceived += result.value.length;
+                    //current = decodeToText(result.value)();
+                    current = decoder.decode(result.value, { stream : true});
+                    complete += current;
+                    callback(current)();  //we need extra () when calling from PS
+                    return reader.read().then(processResult);
+                  });
 
-          //unlike the original demo from https://jakearchibald.com/2016/streams-ftw/
-          //we `return` the reader.read() Promise to be resolved in our callback.
-          return reader.read().then(function processResult(result){
-                  var current = null;
-                  if(result.done){
-                    console.log('Fetch completed reading of ' + bytesReceived + ' bytes.');
-                    return complete;
-                  }
-                  bytesReceived += result.value.length;
-                  current = decodeToText(result.value)();
-                  complete += current;
-                  callback(current)();  //we need extra () when calling from PS
-                  return reader.read().then(processResult);
-                });
-
-        }).catch(function(err){
-          console.log('Error while fetching data from ' + url + ', message: ' + err);
-        });
-        wrapper(_fetch)();  //Execute wrapper by giving it the `fetch` function.
-                            //Also, notice the additional pair of (). This is because we have to
-                            //execute the wrapper + the Promise itself. PureScript knows nothing about
-                            //multi-parameter functions. All PS-functions are curried.
-        return {};
+          }).catch(function(err){
+            console.log('Error while fetching data from ' + url + ', message: ' + err);
+          });
+          wrapper(_fetch)();  //Execute wrapper by giving it the `fetch` function.
+                              //Also, notice the additional pair of (). This is because we have to
+                              //execute the wrapper + the Promise itself. PureScript knows nothing about
+                              //multi-parameter functions. All PS-functions are curried.
+          return {};
+        };
       };
     };
   };
 
+  //Function: decode-text wrapper
+  //This is a PureScript-acceptable way of calling functions
+  //Currently not used directly on PureScript's side.
   var decodeToText = function(data){
     return function(){
-      var decoder = new TextDecoder();
-      return decoder.decode(data, { stream : true });
+      try {
+        var decoder = new TextDecoder();
+        return decoder.decode(data, { stream : true });
+      } catch(e) {
+        return function(e){
+          console.log('Error in decodeToText: ' + e);
+        }
+      }
     };
   };
 
-  //This is a helper for creating internal callbacks to process responses.
-  //Basically, we take the original callback from PS and let it `consume` a Promise
-  //from JS-part of the app.
+  var getDecoder = function(utfLabel){
+    return function(options){
+      return function(){
+          var decoder = null;
+          if(utfLabel &&
+            utfLabel.constructor &&
+            utfLabel.constructor.name != 'Nothing'){
+              if(options &&
+                options.constructor &&
+                options.constructor.name != 'Nothing'){
+              decoder = new TextDecoder(utfLabel.value0, options.value0);
+            }else{
+              decoder = new TextDecoder(utfLabel.value0);
+            }
+          }else{
+            decoder = new TextDecoder('utf8', { fatal : true });
+          }
+          return decoder;
+      };
+    };
+  };
+
+  var decode = function(data){
+    if(!data ||
+      (data.constructor &&
+        data.constructor.name == 'Nothing')){
+        return null;
+    }
+    return function(decoder){
+      return function(){
+        if(decoder &&
+          decoder.constructor &&
+          decoder.constructor.name != 'Nothing'){
+          return decoder.value0.decode(data.value0, { stream : true });
+        }else{
+          decoder = getDecoder('utf8')({ fatal : true })();
+          return decoder.decode(data.value0, { stream : true });
+        }
+      };
+    };
+  };
+
+  //Function: Wrapper
   var wrapper = function(val){
     return function(){
       val.then(function(v){
-        //do nothing
+        //do nothing, for now...
       }).catch(function(err){
         console.error(err);
       });
@@ -69,6 +136,8 @@ var PS = { };
     };
   };
   exports["read"] = read;
+  exports["getDecoder"] = getDecoder;
+  exports["decode"] = decode;
   exports["logRaw"] = logRaw;;
 })(PS["API.Web.Streams"] = PS["API.Web.Streams"] || {});
 (function(exports) {
@@ -1239,54 +1308,6 @@ var PS = { };
  
 })(PS["Control.Monad.Eff"] = PS["Control.Monad.Eff"] || {});
 (function(exports) {
-  /* global exports, console */
-  "use strict";
-
-  // module Control.Monad.Eff.Console
-
-  exports.log = function (s) {
-    return function () {
-      console.log(s);
-      return {};
-    };
-  };
-
-  exports.error = function (s) {
-    return function () {
-      console.error(s);
-      return {};
-    };
-  };
- 
-})(PS["Control.Monad.Eff.Console"] = PS["Control.Monad.Eff.Console"] || {});
-(function(exports) {
-  // Generated by psc version 0.8.0.0
-  "use strict";
-  var $foreign = PS["Control.Monad.Eff.Console"];
-  var Prelude = PS["Prelude"];
-  var Control_Monad_Eff = PS["Control.Monad.Eff"];     
-  var print = function (dictShow) {
-      return function ($1) {
-          return $foreign.log(Prelude.show(dictShow)($1));
-      };
-  };
-  exports["print"] = print;
-  exports["error"] = $foreign.error;
-  exports["log"] = $foreign.log;;
- 
-})(PS["Control.Monad.Eff.Console"] = PS["Control.Monad.Eff.Console"] || {});
-(function(exports) {
-  // Generated by psc version 0.8.0.0
-  "use strict";
-  var $foreign = PS["API.Web.Streams"];
-  var Prelude = PS["Prelude"];
-  var Control_Monad_Eff = PS["Control.Monad.Eff"];
-  var Control_Monad_Eff_Console = PS["Control.Monad.Eff.Console"];
-  exports["read"] = $foreign.read;
-  exports["logRaw"] = $foreign.logRaw;;
- 
-})(PS["API.Web.Streams"] = PS["API.Web.Streams"] || {});
-(function(exports) {
   // Generated by psc version 0.8.0.0
   "use strict";
   var Prelude = PS["Prelude"];     
@@ -1347,6 +1368,515 @@ var PS = { };
   exports["alternativeArray"] = alternativeArray;;
  
 })(PS["Control.Alternative"] = PS["Control.Alternative"] || {});
+(function(exports) {
+  // Generated by psc version 0.8.0.0
+  "use strict";
+  var Prelude = PS["Prelude"];     
+  var Extend = function (__superclass_Prelude$dotFunctor_0, extend) {
+      this["__superclass_Prelude.Functor_0"] = __superclass_Prelude$dotFunctor_0;
+      this.extend = extend;
+  };
+  var extendFn = function (dictSemigroup) {
+      return new Extend(function () {
+          return Prelude.functorFn;
+      }, function (f) {
+          return function (g) {
+              return function (w) {
+                  return f(function (w__ALT) {
+                      return g(Prelude["<>"](dictSemigroup)(w)(w__ALT));
+                  });
+              };
+          };
+      });
+  };
+  var extend = function (dict) {
+      return dict.extend;
+  };
+  var $less$less$eq = function (dictExtend) {
+      return extend(dictExtend);
+  };
+  var $eq$less$eq = function (dictExtend) {
+      return function (f) {
+          return function (g) {
+              return function (w) {
+                  return f($less$less$eq(dictExtend)(g)(w));
+              };
+          };
+      };
+  };
+  var $eq$greater$eq = function (dictExtend) {
+      return function (f) {
+          return function (g) {
+              return function (w) {
+                  return g($less$less$eq(dictExtend)(f)(w));
+              };
+          };
+      };
+  };
+  var $eq$greater$greater = function (dictExtend) {
+      return function (w) {
+          return function (f) {
+              return $less$less$eq(dictExtend)(f)(w);
+          };
+      };
+  };
+  var duplicate = function (dictExtend) {
+      return extend(dictExtend)(Prelude.id(Prelude.categoryFn));
+  };
+  exports["Extend"] = Extend;
+  exports["duplicate"] = duplicate;
+  exports["=<="] = $eq$less$eq;
+  exports["=>="] = $eq$greater$eq;
+  exports["=>>"] = $eq$greater$greater;
+  exports["<<="] = $less$less$eq;
+  exports["extend"] = extend;
+  exports["extendFn"] = extendFn;;
+ 
+})(PS["Control.Extend"] = PS["Control.Extend"] || {});
+(function(exports) {
+  // Generated by psc version 0.8.0.0
+  "use strict";
+  var Prelude = PS["Prelude"];
+  var Control_Alternative = PS["Control.Alternative"];
+  var Control_Plus = PS["Control.Plus"];     
+  var MonadPlus = function (__superclass_Control$dotAlternative$dotAlternative_1, __superclass_Prelude$dotMonad_0) {
+      this["__superclass_Control.Alternative.Alternative_1"] = __superclass_Control$dotAlternative$dotAlternative_1;
+      this["__superclass_Prelude.Monad_0"] = __superclass_Prelude$dotMonad_0;
+  };
+  var monadPlusArray = new MonadPlus(function () {
+      return Control_Alternative.alternativeArray;
+  }, function () {
+      return Prelude.monadArray;
+  });
+  var guard = function (dictMonadPlus) {
+      return function (v) {
+          if (v) {
+              return Prelude["return"]((dictMonadPlus["__superclass_Control.Alternative.Alternative_1"]())["__superclass_Prelude.Applicative_0"]())(Prelude.unit);
+          };
+          if (!v) {
+              return Control_Plus.empty((dictMonadPlus["__superclass_Control.Alternative.Alternative_1"]())["__superclass_Control.Plus.Plus_1"]());
+          };
+          throw new Error("Failed pattern match at Control.MonadPlus line 35, column 1 - line 36, column 1: " + [ v.constructor.name ]);
+      };
+  };
+  exports["MonadPlus"] = MonadPlus;
+  exports["guard"] = guard;
+  exports["monadPlusArray"] = monadPlusArray;;
+ 
+})(PS["Control.MonadPlus"] = PS["Control.MonadPlus"] || {});
+(function(exports) {
+  // Generated by psc version 0.8.0.0
+  "use strict";
+  var Prelude = PS["Prelude"];     
+  var Invariant = function (imap) {
+      this.imap = imap;
+  };
+  var imapF = function (dictFunctor) {
+      return function ($1) {
+          return Prelude["const"](Prelude.map(dictFunctor)($1));
+      };
+  };
+  var invariantArray = new Invariant(imapF(Prelude.functorArray));
+  var invariantFn = new Invariant(imapF(Prelude.functorFn));
+  var imap = function (dict) {
+      return dict.imap;
+  };
+  exports["Invariant"] = Invariant;
+  exports["imapF"] = imapF;
+  exports["imap"] = imap;
+  exports["invariantFn"] = invariantFn;
+  exports["invariantArray"] = invariantArray;;
+ 
+})(PS["Data.Functor.Invariant"] = PS["Data.Functor.Invariant"] || {});
+(function(exports) {
+  // Generated by psc version 0.8.0.0
+  "use strict";
+  var Prelude = PS["Prelude"];     
+  var Monoid = function (__superclass_Prelude$dotSemigroup_0, mempty) {
+      this["__superclass_Prelude.Semigroup_0"] = __superclass_Prelude$dotSemigroup_0;
+      this.mempty = mempty;
+  };
+  var monoidUnit = new Monoid(function () {
+      return Prelude.semigroupUnit;
+  }, Prelude.unit);
+  var monoidString = new Monoid(function () {
+      return Prelude.semigroupString;
+  }, "");
+  var monoidArray = new Monoid(function () {
+      return Prelude.semigroupArray;
+  }, [  ]);
+  var mempty = function (dict) {
+      return dict.mempty;
+  };
+  var monoidFn = function (dictMonoid) {
+      return new Monoid(function () {
+          return Prelude.semigroupFn(dictMonoid["__superclass_Prelude.Semigroup_0"]());
+      }, Prelude["const"](mempty(dictMonoid)));
+  };
+  exports["Monoid"] = Monoid;
+  exports["mempty"] = mempty;
+  exports["monoidUnit"] = monoidUnit;
+  exports["monoidFn"] = monoidFn;
+  exports["monoidString"] = monoidString;
+  exports["monoidArray"] = monoidArray;;
+ 
+})(PS["Data.Monoid"] = PS["Data.Monoid"] || {});
+(function(exports) {
+  // Generated by psc version 0.8.0.0
+  "use strict";
+  var Prelude = PS["Prelude"];
+  var Control_Alt = PS["Control.Alt"];
+  var Control_Alternative = PS["Control.Alternative"];
+  var Control_Extend = PS["Control.Extend"];
+  var Control_MonadPlus = PS["Control.MonadPlus"];
+  var Control_Plus = PS["Control.Plus"];
+  var Data_Functor_Invariant = PS["Data.Functor.Invariant"];
+  var Data_Monoid = PS["Data.Monoid"];     
+  var Nothing = (function () {
+      function Nothing() {
+
+      };
+      Nothing.value = new Nothing();
+      return Nothing;
+  })();
+  var Just = (function () {
+      function Just(value0) {
+          this.value0 = value0;
+      };
+      Just.create = function (value0) {
+          return new Just(value0);
+      };
+      return Just;
+  })();
+  var showMaybe = function (dictShow) {
+      return new Prelude.Show(function (v) {
+          if (v instanceof Just) {
+              return "Just (" + (Prelude.show(dictShow)(v.value0) + ")");
+          };
+          if (v instanceof Nothing) {
+              return "Nothing";
+          };
+          throw new Error("Failed pattern match at Data.Maybe line 289, column 1 - line 291, column 19: " + [ v.constructor.name ]);
+      });
+  };
+  var semigroupMaybe = function (dictSemigroup) {
+      return new Prelude.Semigroup(function (v) {
+          return function (v1) {
+              if (v instanceof Nothing) {
+                  return v1;
+              };
+              if (v1 instanceof Nothing) {
+                  return v;
+              };
+              if (v instanceof Just && v1 instanceof Just) {
+                  return new Just(Prelude["<>"](dictSemigroup)(v.value0)(v1.value0));
+              };
+              throw new Error("Failed pattern match at Data.Maybe line 231, column 1 - line 236, column 1: " + [ v.constructor.name, v1.constructor.name ]);
+          };
+      });
+  };
+  var monoidMaybe = function (dictSemigroup) {
+      return new Data_Monoid.Monoid(function () {
+          return semigroupMaybe(dictSemigroup);
+      }, Nothing.value);
+  };
+  var maybe$prime = function (g) {
+      return function (f) {
+          return function (v) {
+              if (v instanceof Nothing) {
+                  return g(Prelude.unit);
+              };
+              if (v instanceof Just) {
+                  return f(v.value0);
+              };
+              throw new Error("Failed pattern match at Data.Maybe line 39, column 1 - line 40, column 1: " + [ g.constructor.name, f.constructor.name, v.constructor.name ]);
+          };
+      };
+  };
+  var maybe = function (b) {
+      return function (f) {
+          return function (v) {
+              if (v instanceof Nothing) {
+                  return b;
+              };
+              if (v instanceof Just) {
+                  return f(v.value0);
+              };
+              throw new Error("Failed pattern match at Data.Maybe line 26, column 1 - line 27, column 1: " + [ b.constructor.name, f.constructor.name, v.constructor.name ]);
+          };
+      };
+  };
+  var isNothing = maybe(true)(Prelude["const"](false));
+  var isJust = maybe(false)(Prelude["const"](true));
+  var functorMaybe = new Prelude.Functor(function (fn) {
+      return function (v) {
+          if (v instanceof Just) {
+              return new Just(fn(v.value0));
+          };
+          return Nothing.value;
+      };
+  });
+  var invariantMaybe = new Data_Functor_Invariant.Invariant(Data_Functor_Invariant.imapF(functorMaybe));
+  var fromMaybe$prime = function (a) {
+      return maybe$prime(a)(Prelude.id(Prelude.categoryFn));
+  };
+  var fromMaybe = function (a) {
+      return maybe(a)(Prelude.id(Prelude.categoryFn));
+  };
+  var extendMaybe = new Control_Extend.Extend(function () {
+      return functorMaybe;
+  }, function (f) {
+      return function (v) {
+          if (v instanceof Nothing) {
+              return Nothing.value;
+          };
+          return new Just(f(v));
+      };
+  });
+  var eqMaybe = function (dictEq) {
+      return new Prelude.Eq(function (v) {
+          return function (v1) {
+              if (v instanceof Nothing && v1 instanceof Nothing) {
+                  return true;
+              };
+              if (v instanceof Just && v1 instanceof Just) {
+                  return Prelude["=="](dictEq)(v.value0)(v1.value0);
+              };
+              return false;
+          };
+      });
+  };
+  var ordMaybe = function (dictOrd) {
+      return new Prelude.Ord(function () {
+          return eqMaybe(dictOrd["__superclass_Prelude.Eq_0"]());
+      }, function (v) {
+          return function (v1) {
+              if (v instanceof Just && v1 instanceof Just) {
+                  return Prelude.compare(dictOrd)(v.value0)(v1.value0);
+              };
+              if (v instanceof Nothing && v1 instanceof Nothing) {
+                  return Prelude.EQ.value;
+              };
+              if (v instanceof Nothing) {
+                  return Prelude.LT.value;
+              };
+              if (v1 instanceof Nothing) {
+                  return Prelude.GT.value;
+              };
+              throw new Error("Failed pattern match at Data.Maybe line 269, column 1 - line 275, column 1: " + [ v.constructor.name, v1.constructor.name ]);
+          };
+      });
+  };
+  var boundedMaybe = function (dictBounded) {
+      return new Prelude.Bounded(Nothing.value, new Just(Prelude.top(dictBounded)));
+  };
+  var boundedOrdMaybe = function (dictBoundedOrd) {
+      return new Prelude.BoundedOrd(function () {
+          return boundedMaybe(dictBoundedOrd["__superclass_Prelude.Bounded_0"]());
+      }, function () {
+          return ordMaybe(dictBoundedOrd["__superclass_Prelude.Ord_1"]());
+      });
+  };
+  var applyMaybe = new Prelude.Apply(function () {
+      return functorMaybe;
+  }, function (v) {
+      return function (x) {
+          if (v instanceof Just) {
+              return Prelude["<$>"](functorMaybe)(v.value0)(x);
+          };
+          if (v instanceof Nothing) {
+              return Nothing.value;
+          };
+          throw new Error("Failed pattern match at Data.Maybe line 121, column 1 - line 145, column 1: " + [ v.constructor.name, x.constructor.name ]);
+      };
+  });
+  var bindMaybe = new Prelude.Bind(function () {
+      return applyMaybe;
+  }, function (v) {
+      return function (k) {
+          if (v instanceof Just) {
+              return k(v.value0);
+          };
+          if (v instanceof Nothing) {
+              return Nothing.value;
+          };
+          throw new Error("Failed pattern match at Data.Maybe line 180, column 1 - line 199, column 1: " + [ v.constructor.name, k.constructor.name ]);
+      };
+  });
+  var booleanAlgebraMaybe = function (dictBooleanAlgebra) {
+      return new Prelude.BooleanAlgebra(function () {
+          return boundedMaybe(dictBooleanAlgebra["__superclass_Prelude.Bounded_0"]());
+      }, function (x) {
+          return function (y) {
+              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.conj(dictBooleanAlgebra))(x))(y);
+          };
+      }, function (x) {
+          return function (y) {
+              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.disj(dictBooleanAlgebra))(x))(y);
+          };
+      }, Prelude.map(functorMaybe)(Prelude.not(dictBooleanAlgebra)));
+  };
+  var semiringMaybe = function (dictSemiring) {
+      return new Prelude.Semiring(function (x) {
+          return function (y) {
+              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.add(dictSemiring))(x))(y);
+          };
+      }, function (x) {
+          return function (y) {
+              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.mul(dictSemiring))(x))(y);
+          };
+      }, new Just(Prelude.one(dictSemiring)), new Just(Prelude.zero(dictSemiring)));
+  };
+  var moduloSemiringMaybe = function (dictModuloSemiring) {
+      return new Prelude.ModuloSemiring(function () {
+          return semiringMaybe(dictModuloSemiring["__superclass_Prelude.Semiring_0"]());
+      }, function (x) {
+          return function (y) {
+              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.div(dictModuloSemiring))(x))(y);
+          };
+      }, function (x) {
+          return function (y) {
+              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.mod(dictModuloSemiring))(x))(y);
+          };
+      });
+  };
+  var ringMaybe = function (dictRing) {
+      return new Prelude.Ring(function () {
+          return semiringMaybe(dictRing["__superclass_Prelude.Semiring_0"]());
+      }, function (x) {
+          return function (y) {
+              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.sub(dictRing))(x))(y);
+          };
+      });
+  };
+  var divisionRingMaybe = function (dictDivisionRing) {
+      return new Prelude.DivisionRing(function () {
+          return moduloSemiringMaybe(dictDivisionRing["__superclass_Prelude.ModuloSemiring_1"]());
+      }, function () {
+          return ringMaybe(dictDivisionRing["__superclass_Prelude.Ring_0"]());
+      });
+  };
+  var numMaybe = function (dictNum) {
+      return new Prelude.Num(function () {
+          return divisionRingMaybe(dictNum["__superclass_Prelude.DivisionRing_0"]());
+      });
+  };
+  var applicativeMaybe = new Prelude.Applicative(function () {
+      return applyMaybe;
+  }, Just.create);
+  var monadMaybe = new Prelude.Monad(function () {
+      return applicativeMaybe;
+  }, function () {
+      return bindMaybe;
+  });
+  var altMaybe = new Control_Alt.Alt(function () {
+      return functorMaybe;
+  }, function (v) {
+      return function (r) {
+          if (v instanceof Nothing) {
+              return r;
+          };
+          return v;
+      };
+  });
+  var plusMaybe = new Control_Plus.Plus(function () {
+      return altMaybe;
+  }, Nothing.value);
+  var alternativeMaybe = new Control_Alternative.Alternative(function () {
+      return plusMaybe;
+  }, function () {
+      return applicativeMaybe;
+  });
+  var monadPlusMaybe = new Control_MonadPlus.MonadPlus(function () {
+      return alternativeMaybe;
+  }, function () {
+      return monadMaybe;
+  });
+  exports["Nothing"] = Nothing;
+  exports["Just"] = Just;
+  exports["isNothing"] = isNothing;
+  exports["isJust"] = isJust;
+  exports["fromMaybe'"] = fromMaybe$prime;
+  exports["fromMaybe"] = fromMaybe;
+  exports["maybe'"] = maybe$prime;
+  exports["maybe"] = maybe;
+  exports["functorMaybe"] = functorMaybe;
+  exports["applyMaybe"] = applyMaybe;
+  exports["applicativeMaybe"] = applicativeMaybe;
+  exports["altMaybe"] = altMaybe;
+  exports["plusMaybe"] = plusMaybe;
+  exports["alternativeMaybe"] = alternativeMaybe;
+  exports["bindMaybe"] = bindMaybe;
+  exports["monadMaybe"] = monadMaybe;
+  exports["monadPlusMaybe"] = monadPlusMaybe;
+  exports["extendMaybe"] = extendMaybe;
+  exports["invariantMaybe"] = invariantMaybe;
+  exports["semigroupMaybe"] = semigroupMaybe;
+  exports["monoidMaybe"] = monoidMaybe;
+  exports["semiringMaybe"] = semiringMaybe;
+  exports["moduloSemiringMaybe"] = moduloSemiringMaybe;
+  exports["ringMaybe"] = ringMaybe;
+  exports["divisionRingMaybe"] = divisionRingMaybe;
+  exports["numMaybe"] = numMaybe;
+  exports["eqMaybe"] = eqMaybe;
+  exports["ordMaybe"] = ordMaybe;
+  exports["boundedMaybe"] = boundedMaybe;
+  exports["boundedOrdMaybe"] = boundedOrdMaybe;
+  exports["booleanAlgebraMaybe"] = booleanAlgebraMaybe;
+  exports["showMaybe"] = showMaybe;;
+ 
+})(PS["Data.Maybe"] = PS["Data.Maybe"] || {});
+(function(exports) {
+  /* global exports, console */
+  "use strict";
+
+  // module Control.Monad.Eff.Console
+
+  exports.log = function (s) {
+    return function () {
+      console.log(s);
+      return {};
+    };
+  };
+
+  exports.error = function (s) {
+    return function () {
+      console.error(s);
+      return {};
+    };
+  };
+ 
+})(PS["Control.Monad.Eff.Console"] = PS["Control.Monad.Eff.Console"] || {});
+(function(exports) {
+  // Generated by psc version 0.8.0.0
+  "use strict";
+  var $foreign = PS["Control.Monad.Eff.Console"];
+  var Prelude = PS["Prelude"];
+  var Control_Monad_Eff = PS["Control.Monad.Eff"];     
+  var print = function (dictShow) {
+      return function ($1) {
+          return $foreign.log(Prelude.show(dictShow)($1));
+      };
+  };
+  exports["print"] = print;
+  exports["error"] = $foreign.error;
+  exports["log"] = $foreign.log;;
+ 
+})(PS["Control.Monad.Eff.Console"] = PS["Control.Monad.Eff.Console"] || {});
+(function(exports) {
+  // Generated by psc version 0.8.0.0
+  "use strict";
+  var $foreign = PS["API.Web.Streams"];
+  var Prelude = PS["Prelude"];
+  var Control_Monad_Eff = PS["Control.Monad.Eff"];
+  var Data_Maybe = PS["Data.Maybe"];
+  var Control_Monad_Eff_Console = PS["Control.Monad.Eff.Console"];
+  exports["getDecoder"] = $foreign.getDecoder;
+  exports["decode"] = $foreign.decode;
+  exports["read"] = $foreign.read;
+  exports["logRaw"] = $foreign.logRaw;;
+ 
+})(PS["API.Web.Streams"] = PS["API.Web.Streams"] || {});
 (function(exports) {
   // Generated by psc version 0.8.0.0
   "use strict";
@@ -1570,71 +2100,6 @@ var PS = { };
 (function(exports) {
   // Generated by psc version 0.8.0.0
   "use strict";
-  var Prelude = PS["Prelude"];     
-  var Extend = function (__superclass_Prelude$dotFunctor_0, extend) {
-      this["__superclass_Prelude.Functor_0"] = __superclass_Prelude$dotFunctor_0;
-      this.extend = extend;
-  };
-  var extendFn = function (dictSemigroup) {
-      return new Extend(function () {
-          return Prelude.functorFn;
-      }, function (f) {
-          return function (g) {
-              return function (w) {
-                  return f(function (w__ALT) {
-                      return g(Prelude["<>"](dictSemigroup)(w)(w__ALT));
-                  });
-              };
-          };
-      });
-  };
-  var extend = function (dict) {
-      return dict.extend;
-  };
-  var $less$less$eq = function (dictExtend) {
-      return extend(dictExtend);
-  };
-  var $eq$less$eq = function (dictExtend) {
-      return function (f) {
-          return function (g) {
-              return function (w) {
-                  return f($less$less$eq(dictExtend)(g)(w));
-              };
-          };
-      };
-  };
-  var $eq$greater$eq = function (dictExtend) {
-      return function (f) {
-          return function (g) {
-              return function (w) {
-                  return g($less$less$eq(dictExtend)(f)(w));
-              };
-          };
-      };
-  };
-  var $eq$greater$greater = function (dictExtend) {
-      return function (w) {
-          return function (f) {
-              return $less$less$eq(dictExtend)(f)(w);
-          };
-      };
-  };
-  var duplicate = function (dictExtend) {
-      return extend(dictExtend)(Prelude.id(Prelude.categoryFn));
-  };
-  exports["Extend"] = Extend;
-  exports["duplicate"] = duplicate;
-  exports["=<="] = $eq$less$eq;
-  exports["=>="] = $eq$greater$eq;
-  exports["=>>"] = $eq$greater$greater;
-  exports["<<="] = $less$less$eq;
-  exports["extend"] = extend;
-  exports["extendFn"] = extendFn;;
- 
-})(PS["Control.Extend"] = PS["Control.Extend"] || {});
-(function(exports) {
-  // Generated by psc version 0.8.0.0
-  "use strict";
   var Prelude = PS["Prelude"];
   var Control_Extend = PS["Control.Extend"];     
   var Comonad = function (__superclass_Control$dotExtend$dotExtend_0, extract) {
@@ -1670,39 +2135,6 @@ var PS = { };
   exports["defer"] = defer;;
  
 })(PS["Control.Lazy"] = PS["Control.Lazy"] || {});
-(function(exports) {
-  // Generated by psc version 0.8.0.0
-  "use strict";
-  var Prelude = PS["Prelude"];     
-  var Monoid = function (__superclass_Prelude$dotSemigroup_0, mempty) {
-      this["__superclass_Prelude.Semigroup_0"] = __superclass_Prelude$dotSemigroup_0;
-      this.mempty = mempty;
-  };
-  var monoidUnit = new Monoid(function () {
-      return Prelude.semigroupUnit;
-  }, Prelude.unit);
-  var monoidString = new Monoid(function () {
-      return Prelude.semigroupString;
-  }, "");
-  var monoidArray = new Monoid(function () {
-      return Prelude.semigroupArray;
-  }, [  ]);
-  var mempty = function (dict) {
-      return dict.mempty;
-  };
-  var monoidFn = function (dictMonoid) {
-      return new Monoid(function () {
-          return Prelude.semigroupFn(dictMonoid["__superclass_Prelude.Semigroup_0"]());
-      }, Prelude["const"](mempty(dictMonoid)));
-  };
-  exports["Monoid"] = Monoid;
-  exports["mempty"] = mempty;
-  exports["monoidUnit"] = monoidUnit;
-  exports["monoidFn"] = monoidFn;
-  exports["monoidString"] = monoidString;
-  exports["monoidArray"] = monoidArray;;
- 
-})(PS["Data.Monoid"] = PS["Data.Monoid"] || {});
 (function(exports) {
   // Generated by psc version 0.8.0.0
   "use strict";
@@ -1933,30 +2365,6 @@ var PS = { };
   exports["semiringConj"] = semiringConj;;
  
 })(PS["Data.Monoid.Conj"] = PS["Data.Monoid.Conj"] || {});
-(function(exports) {
-  // Generated by psc version 0.8.0.0
-  "use strict";
-  var Prelude = PS["Prelude"];     
-  var Invariant = function (imap) {
-      this.imap = imap;
-  };
-  var imapF = function (dictFunctor) {
-      return function ($1) {
-          return Prelude["const"](Prelude.map(dictFunctor)($1));
-      };
-  };
-  var invariantArray = new Invariant(imapF(Prelude.functorArray));
-  var invariantFn = new Invariant(imapF(Prelude.functorFn));
-  var imap = function (dict) {
-      return dict.imap;
-  };
-  exports["Invariant"] = Invariant;
-  exports["imapF"] = imapF;
-  exports["imap"] = imap;
-  exports["invariantFn"] = invariantFn;
-  exports["invariantArray"] = invariantArray;;
- 
-})(PS["Data.Functor.Invariant"] = PS["Data.Functor.Invariant"] || {});
 (function(exports) {
   // Generated by psc version 0.8.0.0
   "use strict";
@@ -2359,342 +2767,6 @@ var PS = { };
   };
  
 })(PS["Data.Foldable"] = PS["Data.Foldable"] || {});
-(function(exports) {
-  // Generated by psc version 0.8.0.0
-  "use strict";
-  var Prelude = PS["Prelude"];
-  var Control_Alternative = PS["Control.Alternative"];
-  var Control_Plus = PS["Control.Plus"];     
-  var MonadPlus = function (__superclass_Control$dotAlternative$dotAlternative_1, __superclass_Prelude$dotMonad_0) {
-      this["__superclass_Control.Alternative.Alternative_1"] = __superclass_Control$dotAlternative$dotAlternative_1;
-      this["__superclass_Prelude.Monad_0"] = __superclass_Prelude$dotMonad_0;
-  };
-  var monadPlusArray = new MonadPlus(function () {
-      return Control_Alternative.alternativeArray;
-  }, function () {
-      return Prelude.monadArray;
-  });
-  var guard = function (dictMonadPlus) {
-      return function (v) {
-          if (v) {
-              return Prelude["return"]((dictMonadPlus["__superclass_Control.Alternative.Alternative_1"]())["__superclass_Prelude.Applicative_0"]())(Prelude.unit);
-          };
-          if (!v) {
-              return Control_Plus.empty((dictMonadPlus["__superclass_Control.Alternative.Alternative_1"]())["__superclass_Control.Plus.Plus_1"]());
-          };
-          throw new Error("Failed pattern match at Control.MonadPlus line 35, column 1 - line 36, column 1: " + [ v.constructor.name ]);
-      };
-  };
-  exports["MonadPlus"] = MonadPlus;
-  exports["guard"] = guard;
-  exports["monadPlusArray"] = monadPlusArray;;
- 
-})(PS["Control.MonadPlus"] = PS["Control.MonadPlus"] || {});
-(function(exports) {
-  // Generated by psc version 0.8.0.0
-  "use strict";
-  var Prelude = PS["Prelude"];
-  var Control_Alt = PS["Control.Alt"];
-  var Control_Alternative = PS["Control.Alternative"];
-  var Control_Extend = PS["Control.Extend"];
-  var Control_MonadPlus = PS["Control.MonadPlus"];
-  var Control_Plus = PS["Control.Plus"];
-  var Data_Functor_Invariant = PS["Data.Functor.Invariant"];
-  var Data_Monoid = PS["Data.Monoid"];     
-  var Nothing = (function () {
-      function Nothing() {
-
-      };
-      Nothing.value = new Nothing();
-      return Nothing;
-  })();
-  var Just = (function () {
-      function Just(value0) {
-          this.value0 = value0;
-      };
-      Just.create = function (value0) {
-          return new Just(value0);
-      };
-      return Just;
-  })();
-  var showMaybe = function (dictShow) {
-      return new Prelude.Show(function (v) {
-          if (v instanceof Just) {
-              return "Just (" + (Prelude.show(dictShow)(v.value0) + ")");
-          };
-          if (v instanceof Nothing) {
-              return "Nothing";
-          };
-          throw new Error("Failed pattern match at Data.Maybe line 289, column 1 - line 291, column 19: " + [ v.constructor.name ]);
-      });
-  };
-  var semigroupMaybe = function (dictSemigroup) {
-      return new Prelude.Semigroup(function (v) {
-          return function (v1) {
-              if (v instanceof Nothing) {
-                  return v1;
-              };
-              if (v1 instanceof Nothing) {
-                  return v;
-              };
-              if (v instanceof Just && v1 instanceof Just) {
-                  return new Just(Prelude["<>"](dictSemigroup)(v.value0)(v1.value0));
-              };
-              throw new Error("Failed pattern match at Data.Maybe line 231, column 1 - line 236, column 1: " + [ v.constructor.name, v1.constructor.name ]);
-          };
-      });
-  };
-  var monoidMaybe = function (dictSemigroup) {
-      return new Data_Monoid.Monoid(function () {
-          return semigroupMaybe(dictSemigroup);
-      }, Nothing.value);
-  };
-  var maybe$prime = function (g) {
-      return function (f) {
-          return function (v) {
-              if (v instanceof Nothing) {
-                  return g(Prelude.unit);
-              };
-              if (v instanceof Just) {
-                  return f(v.value0);
-              };
-              throw new Error("Failed pattern match at Data.Maybe line 39, column 1 - line 40, column 1: " + [ g.constructor.name, f.constructor.name, v.constructor.name ]);
-          };
-      };
-  };
-  var maybe = function (b) {
-      return function (f) {
-          return function (v) {
-              if (v instanceof Nothing) {
-                  return b;
-              };
-              if (v instanceof Just) {
-                  return f(v.value0);
-              };
-              throw new Error("Failed pattern match at Data.Maybe line 26, column 1 - line 27, column 1: " + [ b.constructor.name, f.constructor.name, v.constructor.name ]);
-          };
-      };
-  };
-  var isNothing = maybe(true)(Prelude["const"](false));
-  var isJust = maybe(false)(Prelude["const"](true));
-  var functorMaybe = new Prelude.Functor(function (fn) {
-      return function (v) {
-          if (v instanceof Just) {
-              return new Just(fn(v.value0));
-          };
-          return Nothing.value;
-      };
-  });
-  var invariantMaybe = new Data_Functor_Invariant.Invariant(Data_Functor_Invariant.imapF(functorMaybe));
-  var fromMaybe$prime = function (a) {
-      return maybe$prime(a)(Prelude.id(Prelude.categoryFn));
-  };
-  var fromMaybe = function (a) {
-      return maybe(a)(Prelude.id(Prelude.categoryFn));
-  };
-  var extendMaybe = new Control_Extend.Extend(function () {
-      return functorMaybe;
-  }, function (f) {
-      return function (v) {
-          if (v instanceof Nothing) {
-              return Nothing.value;
-          };
-          return new Just(f(v));
-      };
-  });
-  var eqMaybe = function (dictEq) {
-      return new Prelude.Eq(function (v) {
-          return function (v1) {
-              if (v instanceof Nothing && v1 instanceof Nothing) {
-                  return true;
-              };
-              if (v instanceof Just && v1 instanceof Just) {
-                  return Prelude["=="](dictEq)(v.value0)(v1.value0);
-              };
-              return false;
-          };
-      });
-  };
-  var ordMaybe = function (dictOrd) {
-      return new Prelude.Ord(function () {
-          return eqMaybe(dictOrd["__superclass_Prelude.Eq_0"]());
-      }, function (v) {
-          return function (v1) {
-              if (v instanceof Just && v1 instanceof Just) {
-                  return Prelude.compare(dictOrd)(v.value0)(v1.value0);
-              };
-              if (v instanceof Nothing && v1 instanceof Nothing) {
-                  return Prelude.EQ.value;
-              };
-              if (v instanceof Nothing) {
-                  return Prelude.LT.value;
-              };
-              if (v1 instanceof Nothing) {
-                  return Prelude.GT.value;
-              };
-              throw new Error("Failed pattern match at Data.Maybe line 269, column 1 - line 275, column 1: " + [ v.constructor.name, v1.constructor.name ]);
-          };
-      });
-  };
-  var boundedMaybe = function (dictBounded) {
-      return new Prelude.Bounded(Nothing.value, new Just(Prelude.top(dictBounded)));
-  };
-  var boundedOrdMaybe = function (dictBoundedOrd) {
-      return new Prelude.BoundedOrd(function () {
-          return boundedMaybe(dictBoundedOrd["__superclass_Prelude.Bounded_0"]());
-      }, function () {
-          return ordMaybe(dictBoundedOrd["__superclass_Prelude.Ord_1"]());
-      });
-  };
-  var applyMaybe = new Prelude.Apply(function () {
-      return functorMaybe;
-  }, function (v) {
-      return function (x) {
-          if (v instanceof Just) {
-              return Prelude["<$>"](functorMaybe)(v.value0)(x);
-          };
-          if (v instanceof Nothing) {
-              return Nothing.value;
-          };
-          throw new Error("Failed pattern match at Data.Maybe line 121, column 1 - line 145, column 1: " + [ v.constructor.name, x.constructor.name ]);
-      };
-  });
-  var bindMaybe = new Prelude.Bind(function () {
-      return applyMaybe;
-  }, function (v) {
-      return function (k) {
-          if (v instanceof Just) {
-              return k(v.value0);
-          };
-          if (v instanceof Nothing) {
-              return Nothing.value;
-          };
-          throw new Error("Failed pattern match at Data.Maybe line 180, column 1 - line 199, column 1: " + [ v.constructor.name, k.constructor.name ]);
-      };
-  });
-  var booleanAlgebraMaybe = function (dictBooleanAlgebra) {
-      return new Prelude.BooleanAlgebra(function () {
-          return boundedMaybe(dictBooleanAlgebra["__superclass_Prelude.Bounded_0"]());
-      }, function (x) {
-          return function (y) {
-              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.conj(dictBooleanAlgebra))(x))(y);
-          };
-      }, function (x) {
-          return function (y) {
-              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.disj(dictBooleanAlgebra))(x))(y);
-          };
-      }, Prelude.map(functorMaybe)(Prelude.not(dictBooleanAlgebra)));
-  };
-  var semiringMaybe = function (dictSemiring) {
-      return new Prelude.Semiring(function (x) {
-          return function (y) {
-              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.add(dictSemiring))(x))(y);
-          };
-      }, function (x) {
-          return function (y) {
-              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.mul(dictSemiring))(x))(y);
-          };
-      }, new Just(Prelude.one(dictSemiring)), new Just(Prelude.zero(dictSemiring)));
-  };
-  var moduloSemiringMaybe = function (dictModuloSemiring) {
-      return new Prelude.ModuloSemiring(function () {
-          return semiringMaybe(dictModuloSemiring["__superclass_Prelude.Semiring_0"]());
-      }, function (x) {
-          return function (y) {
-              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.div(dictModuloSemiring))(x))(y);
-          };
-      }, function (x) {
-          return function (y) {
-              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.mod(dictModuloSemiring))(x))(y);
-          };
-      });
-  };
-  var ringMaybe = function (dictRing) {
-      return new Prelude.Ring(function () {
-          return semiringMaybe(dictRing["__superclass_Prelude.Semiring_0"]());
-      }, function (x) {
-          return function (y) {
-              return Prelude["<*>"](applyMaybe)(Prelude["<$>"](functorMaybe)(Prelude.sub(dictRing))(x))(y);
-          };
-      });
-  };
-  var divisionRingMaybe = function (dictDivisionRing) {
-      return new Prelude.DivisionRing(function () {
-          return moduloSemiringMaybe(dictDivisionRing["__superclass_Prelude.ModuloSemiring_1"]());
-      }, function () {
-          return ringMaybe(dictDivisionRing["__superclass_Prelude.Ring_0"]());
-      });
-  };
-  var numMaybe = function (dictNum) {
-      return new Prelude.Num(function () {
-          return divisionRingMaybe(dictNum["__superclass_Prelude.DivisionRing_0"]());
-      });
-  };
-  var applicativeMaybe = new Prelude.Applicative(function () {
-      return applyMaybe;
-  }, Just.create);
-  var monadMaybe = new Prelude.Monad(function () {
-      return applicativeMaybe;
-  }, function () {
-      return bindMaybe;
-  });
-  var altMaybe = new Control_Alt.Alt(function () {
-      return functorMaybe;
-  }, function (v) {
-      return function (r) {
-          if (v instanceof Nothing) {
-              return r;
-          };
-          return v;
-      };
-  });
-  var plusMaybe = new Control_Plus.Plus(function () {
-      return altMaybe;
-  }, Nothing.value);
-  var alternativeMaybe = new Control_Alternative.Alternative(function () {
-      return plusMaybe;
-  }, function () {
-      return applicativeMaybe;
-  });
-  var monadPlusMaybe = new Control_MonadPlus.MonadPlus(function () {
-      return alternativeMaybe;
-  }, function () {
-      return monadMaybe;
-  });
-  exports["Nothing"] = Nothing;
-  exports["Just"] = Just;
-  exports["isNothing"] = isNothing;
-  exports["isJust"] = isJust;
-  exports["fromMaybe'"] = fromMaybe$prime;
-  exports["fromMaybe"] = fromMaybe;
-  exports["maybe'"] = maybe$prime;
-  exports["maybe"] = maybe;
-  exports["functorMaybe"] = functorMaybe;
-  exports["applyMaybe"] = applyMaybe;
-  exports["applicativeMaybe"] = applicativeMaybe;
-  exports["altMaybe"] = altMaybe;
-  exports["plusMaybe"] = plusMaybe;
-  exports["alternativeMaybe"] = alternativeMaybe;
-  exports["bindMaybe"] = bindMaybe;
-  exports["monadMaybe"] = monadMaybe;
-  exports["monadPlusMaybe"] = monadPlusMaybe;
-  exports["extendMaybe"] = extendMaybe;
-  exports["invariantMaybe"] = invariantMaybe;
-  exports["semigroupMaybe"] = semigroupMaybe;
-  exports["monoidMaybe"] = monoidMaybe;
-  exports["semiringMaybe"] = semiringMaybe;
-  exports["moduloSemiringMaybe"] = moduloSemiringMaybe;
-  exports["ringMaybe"] = ringMaybe;
-  exports["divisionRingMaybe"] = divisionRingMaybe;
-  exports["numMaybe"] = numMaybe;
-  exports["eqMaybe"] = eqMaybe;
-  exports["ordMaybe"] = ordMaybe;
-  exports["boundedMaybe"] = boundedMaybe;
-  exports["boundedOrdMaybe"] = boundedOrdMaybe;
-  exports["booleanAlgebraMaybe"] = booleanAlgebraMaybe;
-  exports["showMaybe"] = showMaybe;;
- 
-})(PS["Data.Maybe"] = PS["Data.Maybe"] || {});
 (function(exports) {
   // Generated by psc version 0.8.0.0
   "use strict";
@@ -25572,15 +25644,19 @@ var PS = { };
   // Generated by psc version 0.8.0.0
   "use strict";
   var Prelude = PS["Prelude"];
-  var Control_Monad_Eff = PS["Control.Monad.Eff"];
-  var Data_List = PS["Data.List"];
   var Data_Maybe = PS["Data.Maybe"];
+  var Control_Monad_Eff = PS["Control.Monad.Eff"];
   var Control_Monad_Eff_Console = PS["Control.Monad.Eff.Console"];
   var API_Web_Streams = PS["API.Web.Streams"];     
   var callback = function (result) {
       return API_Web_Streams.logRaw(result);
   };
-  var main = API_Web_Streams.read("https://html.spec.whatwg.org/")(callback);
+  var main = function __do() {
+      var v = API_Web_Streams.getDecoder(new Data_Maybe.Just("utf8"))(new Data_Maybe.Just({
+          fatal: true
+      }))();
+      return API_Web_Streams.read("https://html.spec.whatwg.org/")(callback)(new Data_Maybe.Just(v))();
+  };
   exports["main"] = main;
   exports["callback"] = callback;;
  

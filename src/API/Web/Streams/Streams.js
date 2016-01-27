@@ -23,39 +23,42 @@ var logRaw = function(str) {
 //Param, callback : a PureScript-function to be called for each stream chunk
 var read = function(url){
   return function(callback){
-    return function(){
-      var _fetch = fetch(url).then(function(response){
-        var reader = response.body.getReader();
-        var bytesReceived = 0;
-        var complete = null;
+    return function(decoder){
+      return function(){
+        var _fetch = fetch(url).then(function(response){
+          var reader = response.body.getReader();
+          var bytesReceived = 0;
+          var complete = null;
+          var decoder = decoder ? decoder : getDecoder('utf8')({ fatal: true })();
+          //Unlike the original demo from https://jakearchibald.com/2016/streams-ftw/
+          //we `return` the Promise which will be later resolved within a wrapper function.
+          //This is important as we play between JavaScript & PureScript worlds which handle
+          //functions completely differently. One of the most important things is that there
+          //are no functions with multiple arguments in PureScript. All functions are curried.
+          //That's why we have to `convert` them into nested `one-argument` JS-functions.
+          return reader.read().then(function processResult(result){
+                  var current = null;
+                  if(result.done){
+                    console.log('Fetch completed reading of ' + bytesReceived + ' bytes.');
+                    return complete;
+                  }
+                  bytesReceived += result.value.length;
+                  //current = decodeToText(result.value)();
+                  current = decoder.decode(result.value, { stream : true});
+                  complete += current;
+                  callback(current)();  //we need extra () when calling from PS
+                  return reader.read().then(processResult);
+                });
 
-        //Unlike the original demo from https://jakearchibald.com/2016/streams-ftw/
-        //we `return` the Promise which will be later resolved within a wrapper function.
-        //This is important as we play between JavaScript & PureScript worlds which handle
-        //functions completely differently. One of the most important things is that there
-        //are no functions with multiple arguments in PureScript. All functions are curried.
-        //That's why we have to `convert` them into nested `one-argument` JS-functions.
-        return reader.read().then(function processResult(result){
-                var current = null;
-                if(result.done){
-                  console.log('Fetch completed reading of ' + bytesReceived + ' bytes.');
-                  return complete;
-                }
-                bytesReceived += result.value.length;
-                current = decodeToText(result.value)();
-                complete += current;
-                callback(current)();  //we need extra () when calling from PS
-                return reader.read().then(processResult);
-              });
-
-      }).catch(function(err){
-        console.log('Error while fetching data from ' + url + ', message: ' + err);
-      });
-      wrapper(_fetch)();  //Execute wrapper by giving it the `fetch` function.
-                          //Also, notice the additional pair of (). This is because we have to
-                          //execute the wrapper + the Promise itself. PureScript knows nothing about
-                          //multi-parameter functions. All PS-functions are curried.
-      return {};
+        }).catch(function(err){
+          console.log('Error while fetching data from ' + url + ', message: ' + err);
+        });
+        wrapper(_fetch)();  //Execute wrapper by giving it the `fetch` function.
+                            //Also, notice the additional pair of (). This is because we have to
+                            //execute the wrapper + the Promise itself. PureScript knows nothing about
+                            //multi-parameter functions. All PS-functions are curried.
+        return {};
+      };
     };
   };
 };
@@ -65,8 +68,56 @@ var read = function(url){
 //Currently not used directly on PureScript's side.
 var decodeToText = function(data){
   return function(){
-    var decoder = new TextDecoder();
-    return decoder.decode(data, { stream : true });
+    try {
+      var decoder = new TextDecoder();
+      return decoder.decode(data, { stream : true });
+    } catch(e) {
+      return function(e){
+        console.log('Error in decodeToText: ' + e);
+      }
+    }
+  };
+};
+
+var getDecoder = function(utfLabel){
+  return function(options){
+    return function(){
+        var decoder = null;
+        if(utfLabel &&
+          utfLabel.constructor &&
+          utfLabel.constructor.name != 'Nothing'){
+            if(options &&
+              options.constructor &&
+              options.constructor.name != 'Nothing'){
+            decoder = new TextDecoder(utfLabel.value0, options.value0);
+          }else{
+            decoder = new TextDecoder(utfLabel.value0);
+          }
+        }else{
+          decoder = new TextDecoder('utf8', { fatal : true });
+        }
+        return decoder;
+    };
+  };
+};
+
+var decode = function(data){
+  if(!data ||
+    (data.constructor &&
+      data.constructor.name == 'Nothing')){
+      return null;
+  }
+  return function(decoder){
+    return function(){
+      if(decoder &&
+        decoder.constructor &&
+        decoder.constructor.name != 'Nothing'){
+        return decoder.value0.decode(data.value0, { stream : true });
+      }else{
+        decoder = getDecoder('utf8')({ fatal : true })();
+        return decoder.decode(data.value0, { stream : true });
+      }
+    };
   };
 };
 
@@ -83,6 +134,8 @@ var wrapper = function(val){
 };
 //foreign imports are just simple CommonJS exports
 module.exports = {
-  read   : read,
-  logRaw : logRaw
+  read       : read,
+  getDecoder : getDecoder,
+  decode     : decode,
+  logRaw     : logRaw
 };
