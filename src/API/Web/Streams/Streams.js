@@ -29,6 +29,7 @@ var read = function(url){
           var reader = response.body.getReader();
           var bytesReceived = 0;
           var complete = null;
+          //if there's no valid decoder a Default-Decoder will be created
           var decoder = decoder ? decoder : getDecoder('utf8')({ fatal: true })();
           //Unlike the original demo from https://jakearchibald.com/2016/streams-ftw/
           //we `return` the Promise which will be later resolved within a wrapper function.
@@ -78,7 +79,8 @@ var decodeToText = function(data){
     }
   };
 };
-
+//Create a new decoder
+//more info: https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder
 var getDecoder = function(utfLabel){
   return function(options){
     return function(){
@@ -101,6 +103,8 @@ var getDecoder = function(utfLabel){
   };
 };
 
+//For decoding of byte chunks. If there's no valid decoder supplied
+//a new one will be created with settings: 'utf8' & {fatal:true})
 var decode = function(data){
   if(!data ||
     (data.constructor &&
