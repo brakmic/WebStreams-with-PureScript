@@ -14,5 +14,8 @@ callback = \result -> do
 
 main :: forall e. Eff (console :: CONSOLE, webStreamM :: WebStreamM, anyError :: AnyError | e) Unit
 main = do
+       -- | Create a new TextDecoder with UTF8
+       -- | See also: https://developer.mozilla.org/en-US/docs/Web/API/TextDecoder
        decoder <- getDecoder (Just "utf8") (Just { fatal : true })
+       -- | Pass Callback and TextDecoder to `read`
        read "https://html.spec.whatwg.org/" callback (Just decoder)
